@@ -3581,8 +3581,73 @@ more than one space."
          (run-hook-with-args-until-success
           'slime-completion-at-point-functions))))
 
+;; (defun slime-setup-completion ()
+;;   (add-hook 'completion-at-point-functions #'slime--completion-at-point nil t))
+
+(add-to-list 'completion-styles-alist '(slime-capf
+                                         slime-capf-try-completions
+                                         slime-capf-all-completions
+                                         "Ad-Hoc completions styles for slime"))
+
+(add-to-list 'completion-category-overrides
+               '(slime-completion (styles . (slime-capf))))
+
+(defun slime-capf-try-completions (string table pred point)
+  (when (functionp table)
+    (let ((res (funcall table string pred 'try-completion)))
+      (when (eq 'try-completion (car-safe res))
+        (cdr res)))))
+
+(defun slime-capf-all-completions (string table pred point)
+  (when (functionp table)
+    (let ((res (funcall table string pred 'all-completion)))
+      (when (eq 'all-completion (car-safe res))
+        (cdr res)))))
+
 (defun slime-setup-completion ()
-  (add-hook 'completion-at-point-functions #'slime--completion-at-point nil t))
+  (add-hook 'completion-at-point-functions #'slime-flex-completion-at-point nil t))
+
+(defun slime-completion-function-wrapper (fn)
+  (lambda (string pred action)
+    (cl-labels ((all ()
+                     (funcall fn string))
+                (try ()
+                     (let ((all (all)))
+                       (if (string= string (car all))
+                           t
+                         string))))
+      (pcase action
+        (`t (all))
+        (`nil (try))
+        (`try-completion
+         (cons 'try-completion (cons string point)))
+        (`all-completion
+         (cons 'all-completion (all)))
+        (`metadata '(metadata
+                     (display-sort-function . identity)
+                     (category . slime-completion)))
+        (_ nil)))))
+
+(defun slime-flex-completions (prefix)
+  "Get the list of sorted completion objects from completing
+`prefix' in `package' from the connected Lisp."
+  (let ((prefix (cl-etypecase prefix
+                  (symbol (symbol-name prefix))
+                  (string prefix)))
+        (result 
+         (car (slime-eval `(swank:fuzzy-completions ,prefix
+                                                    ,(slime-current-package)
+                                                    :limit ,slime-fuzzy-completion-limit
+                                                    :time-limit-in-msec
+                                                    ,slime-fuzzy-completion-time-limit-in-msec)))))
+    (mapcar #'car result)))
+
+(defun slime-flex-completion-at-point ()
+  "Complete the symbol at point.
+Perform completion similar to `elisp-completion-at-point'."
+  (let* ((end (point))
+         (beg (slime-symbol-start-pos)))
+    (list beg end (slime-completion-function-wrapper #'slime-flex-completions))))
 
 (defun slime-simple-completion-at-point ()
   "Complete the symbol at point.
